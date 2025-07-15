@@ -10,6 +10,7 @@
 #include "extensions.h"
 #include "pybind.h"
 #include "transformer_engine/transformer_engine.h"
+#include "util.h"
 
 namespace transformer_engine::pytorch {
 
@@ -33,6 +34,19 @@ py::object quantize(const at::Tensor& tensor, py::handle quantizer, const py::ob
     DType fake_te_type = GetTransformerEngineDType(fake_tensor_type);
     std::tie(te_output, out) = my_quantizer->create_tensor(input_shape, fake_te_type);
   } else {
+    if (my_quantizer->columnwise_usage && !non_tn_fp8_gemm_supported()) {
+      std::cout << "[DEBUG] quantize: columnwise_usage=True, checking transpose data..." << std::endl;
+      bool transpose_exists = !output.attr("_transpose_invalid").cast<bool>() && !output.attr("_transpose").is_none();
+      std::cout << "[DEBUG] quantize: transpose_exists=" << (transpose_exists ? "true" : "false") << std::endl;
+      if (!transpose_exists) {
+        std::cout << "[DEBUG] quantize: creating new tensor (existing lacks transpose data)" << std::endl;
+        DType fake_te_type = GetTransformerEngineDType(fake_tensor_type);
+        py::object new_out;
+        std::tie(std::ignore, new_out) = my_quantizer->create_tensor(input_shape, fake_te_type);
+        output.attr("_transpose_invalid") = py::bool_(false);
+        output.attr("_transpose") = new_out.attr("_transpose");
+      }
+    }
     out = output;
     te_output = makeTransformerEngineTensor(output, quantizer);
   }
